@@ -9,6 +9,7 @@ ngx_http_unzstd_filter_module is a filter that decompresses responses with “Co
 * [Installation](#installation)
 * [Directives](#directives)
   * [unzstd](#unzstd)
+  * [unzstd_force](#unzstd_force)
   * [unzstd_buffers](#unzstd_buffers)
 * [Author](#author)
 * [License](#license)
@@ -51,6 +52,14 @@ To use theses modules, configure your nginx branch with `--add-module=/path/to/n
 **Context:** *http, server, location*
 
 Enables or disables decompression of zstd compressed responses for clients that lack zstd support.
+
+## unzstd_force
+
+**Syntax:** *unzstd_force on | off;*
+**Default:** *unzstd_force off;*
+**Context:** *http, server, location*
+
+Enables or disables forced zstd decompression of upstream content.
 
 ## unzstd_buffers
 
