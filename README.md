@@ -19,10 +19,6 @@ This Nginx module is currently considered experimental. Issues and PRs are welco
 # Synopsis
 
 ```nginx
-
-# specify the dictionary
-zstd_dict_file /path/to/dict;
-
 server {
     listen 127.0.0.1:8080;
     server_name localhost;
