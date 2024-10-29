@@ -47,8 +47,10 @@ To use theses modules, configure your nginx branch with `--add-module=/path/to/n
 
 ## unzstd
 
-**Syntax:** *unzstd on | off;*  
-**Default:** *unzstd off;*  
+**Syntax:** *unzstd on | off;*
+
+**Default:** *unzstd off;*
+
 **Context:** *http, server, location*
 
 Enables or disables decompression of zstd compressed responses for clients that lack zstd support.
@@ -56,15 +58,19 @@ Enables or disables decompression of zstd compressed responses for clients that 
 ## unzstd_force
 
 **Syntax:** *unzstd_force on | off;*
+
 **Default:** *unzstd_force off;*
+
 **Context:** *http, server, location*
 
 Enables or disables forced zstd decompression of upstream content.
 
 ## unzstd_buffers
 
-**Syntax:** *unzstd_buffers number size;*  
-**Default:** *unzstd_buffers 32 4k | 16 8k;*  
+**Syntax:** *unzstd_buffers number size;*
+
+**Default:** *unzstd_buffers 32 4k | 16 8k;*
+
 **Context:** *http, server, location*
 
 Sets the number and size of buffers used to decompress a response. By default, the buffer size is equal to one memory page. This is either 4K or 8K, depending on a platform.
