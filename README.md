@@ -46,8 +46,7 @@ To use theses modules, configure your nginx branch with `--add-module=/path/to/n
 
 # Directives
 
-
-## zstd
+## unzstd
 
 **Syntax:** *unzstd on | off;*  
 **Default:** *unzstd off;*  
@@ -55,7 +54,7 @@ To use theses modules, configure your nginx branch with `--add-module=/path/to/n
 
 Enables or disables decompression of zstd compressed responses for clients that lack zstd support.
 
-## zstd_buffers
+## unzstd_buffers
 
 **Syntax:** *unzstd_buffers number size;*  
 **Default:** *unzstd_buffers 32 4k | 16 8k;*  
