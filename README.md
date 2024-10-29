@@ -66,7 +66,7 @@ Sets the number and size of buffers used to decompress a response. By default, t
 
 Hanada im@hanada.info
 
-This module is based on ngx_http_gunzip_module(https://nginx.org/en/docs/http/ngx_http_gunzip_module.html), one of nginx core modules and ngx_unbrotli(https://github.com/clyfish/ngx_unbrotli), a nginx module for brotli decompression.
+This module is based on [ngx_http_gunzip_module](https://nginx.org/en/docs/http/ngx_http_gunzip_module.html), one of nginx core modules and [ngx_unbrotli](https://github.com/clyfish/ngx_unbrotli), a nginx module for brotli decompression.
 
 # License
 
