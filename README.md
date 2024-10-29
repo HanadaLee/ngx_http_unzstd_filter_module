@@ -16,6 +16,8 @@ ngx_http_unzstd_filter_module is a filter that decompresses responses with “Co
 
 This Nginx module is currently considered experimental. Issues and PRs are welcome if you encounter any problems.
 
+> Known Issue: Due to improper handling of zstd library dependencies, this module needs to be built together with [zstd-nginx-module](https://github.com/tokers/zstd-nginx-module). I am currently unable to solve this problem. Welcome to submit PR.
+
 # Synopsis
 
 ```nginx
