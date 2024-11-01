@@ -20,7 +20,7 @@
 
 typedef struct {
     ngx_flag_t           enable;
-    ngx_flag_t           force;
+    ngx_array_t         *force;
     ngx_bufs_t           bufs;
 } ngx_http_unzstd_conf_t;
 
@@ -82,8 +82,8 @@ static ngx_command_t  ngx_http_unzstd_filter_commands[] = {
       NULL },
 
     { ngx_string("unzstd_force"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
-      ngx_conf_set_flag_slot,
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_1MORE,
+      ngx_http_set_predicate_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_unzstd_conf_t, force),
       NULL },
@@ -154,13 +154,21 @@ ngx_http_unzstd_header_filter(ngx_http_request_t *r)
         return ngx_http_next_header_filter(r);
     }
 
-    if (!conf->force) {
+    switch (ngx_http_test_predicates(r, conf->force)) {
 
+    case NGX_ERROR:
+        return NGX_ERROR;
+
+    case NGX_OK:
         r->gzip_vary = 1;
 
         if (ngx_http_unzstd_check_request(r) == NGX_OK) {
             return ngx_http_next_header_filter(r);
         }
+        break;
+    
+    default: /* NGX_DECLINED */
+        break;
     }
 
     ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_unzstd_ctx_t));
@@ -791,7 +799,7 @@ ngx_http_unzstd_create_conf(ngx_conf_t *cf)
      */
 
     conf->enable = NGX_CONF_UNSET;
-    conf->force  = NGX_CONF_UNSET;
+    conf->force  = NGX_CONF_UNSET_PTR;
 
     return conf;
 }
@@ -804,7 +812,7 @@ ngx_http_unzstd_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_unzstd_conf_t *conf = child;
 
     ngx_conf_merge_value(conf->enable, prev->enable, 0);
-    ngx_conf_merge_value(conf->force, prev->force, 0);
+    ngx_conf_merge_ptr_value(conf->force, prev->force, NULL);
 
     ngx_conf_merge_bufs_value(conf->bufs, prev->bufs,
                               (128 * 1024) / ngx_pagesize, ngx_pagesize);

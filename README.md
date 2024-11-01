@@ -57,13 +57,13 @@ Enables or disables decompression of zstd compressed responses for clients that 
 
 ## unzstd_force
 
-**Syntax:** *unzstd_force on | off;*
+**Syntax:** *unzstd_force string ...;*
 
-**Default:** *unzstd_force off;*
+**Default:** *-*
 
 **Context:** *http, server, location*
 
-Enables or disables forced zstd decompression of upstream content.
+Defines the conditions for forced brotli decompression. If at least one value in the string parameter is not empty and not equal to "0", forced zstd decompression is performed. But it will not try to decompress responses that do not contain the response header Content-Encoding: zstd.
 
 ## unzstd_buffers
 
