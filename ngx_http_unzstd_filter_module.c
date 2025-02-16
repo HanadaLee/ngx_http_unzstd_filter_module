@@ -738,10 +738,7 @@ ngx_http_unzstd_filter_decompress(ngx_http_request_t *r,
 
     b = ctx->out_buf;
 
-    /* TODO: pennding */
     if (rc == 0 && (ctx->flush || ctx->last)) {
-        r->connection->buffered &= ~NGX_HTTP_GZIP_BUFFERED;
-
         b->flush = ctx->flush;
         b->last_buf = ctx->last;
 
