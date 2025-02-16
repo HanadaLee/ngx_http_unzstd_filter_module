@@ -548,8 +548,6 @@ ngx_http_unzstd_filter_create_dstream(ngx_http_request_t *r,
                         ZSTD_getErrorName(rc));
 
             goto failed;
-            ZSTD_freeDStream(ctx->dstream);
-            return NGX_ERROR;
         }
     }
 
