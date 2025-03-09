@@ -17,7 +17,9 @@ ngx_http_unzstd_filter_module is a filter that decompresses responses with “Co
 
 This Nginx module is currently considered experimental. Issues and PRs are welcome if you encounter any problems.
 
-> Known Issue: Due to improper handling of zstd library dependencies, this module needs to be built together with [zstd-nginx-module](https://github.com/tokers/zstd-nginx-module). I am currently unable to solve this problem. Welcome to submit PR.
+> Known Issue: 
+1. Due to improper handling of zstd library dependencies, this module needs to be built together with [zstd-nginx-module](https://github.com/tokers/zstd-nginx-module). I am currently unable to solve this problem. Welcome to submit PR.
+2. This module occasionally has a problem of sending the chunked end marker (0\r\n\r\n) twice when decompressing chunked responses. I can't fix it at the moment, so I have to temporarily disable this module. If you are interested in this module, you can try to solve it, and your PR is welcome.
 
 # Synopsis
 
