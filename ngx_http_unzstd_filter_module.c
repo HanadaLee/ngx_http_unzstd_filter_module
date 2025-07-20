@@ -600,10 +600,11 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
         return NGX_ERROR;
     }
 
-    ctx->next_in += input.pos;
-    ctx->avail_in -= input.pos;
-    ctx->next_out += output.pos;
-    ctx->avail_out -= output.pos;
+    ctx->next_in = (u_char *) input.src + input.pos;
+    ctx->avail_in = input.size - input.pos;
+
+    ctx->next_out = (u_char *) output.dst + output.pos;
+    ctx->avail_out = output.size - output.pos;
 
     ngx_log_debug5(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "ZSTD_decompressStream out: ni:%p no:%p ai:%ud ao:%ud ret:%ud",
@@ -680,10 +681,10 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 
     if (ctx->flush == ZSTD_IN_BUF_FINISH && ctx->avail_in == 0) {
 
-        if (ret != 0) {
-            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                        "ZSTD_decompressStream() returned non-zero on response end: %ud", ret);
-            return NGX_ERROR;
+        if (ret > 0) {
+            ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                           "ZSTD needs more flush: %ud bytes remaining", ret);
+            return NGX_AGAIN;
         }
 
         if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
