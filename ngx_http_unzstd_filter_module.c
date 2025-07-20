@@ -681,6 +681,22 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 
     if (ctx->flush == ZSTD_IN_BUF_FINISH && ctx->avail_in == 0) {
 
+        if (ctx->avail_out == 0) {
+            cl = ngx_alloc_chain_link(r->pool);
+            if (cl == NULL) {
+                return NGX_ERROR;
+            }
+
+            cl->buf = ctx->out_buf;
+            cl->next = NULL;
+            *ctx->last_out = cl;
+            ctx->last_out = &cl->next;
+
+            if (ngx_http_unzstd_filter_get_buf(r, ctx) != NGX_OK) {
+                return NGX_ERROR;
+            }
+        }
+
         if (ret > 0) {
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                            "ZSTD needs more flush: %ud bytes remaining", ret);
