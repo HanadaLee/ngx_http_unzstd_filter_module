@@ -587,6 +587,7 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
     input.src = ctx->next_in;
     input.size = ctx->avail_in;
     input.pos = 0;
+    ret = 0;
 
     while (input.pos < input.size) {
 
