@@ -13,6 +13,8 @@
 #include <ngx_http.h>
 
 #include <zstd.h>
+
+
 #define ZSTD_IN_BUF_NO_FLUSH      0
 #define ZSTD_IN_BUF_SYNC_FLUSH    1
 #define ZSTD_IN_BUF_FINISH        2
@@ -693,6 +695,7 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 
     if (ctx->in == NULL) {
 
+        /* For dev */
         if (ctx->flush == ZSTD_IN_BUF_FINISH) {
             if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
                 return NGX_ERROR;
