@@ -592,58 +592,60 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
     output.size = ctx->avail_out;
     output.pos = 0;
 
-    ret = ZSTD_decompressStream(ctx->dstream, &output, &input);
+    while (input.pos < input.size) {
+        ret = ZSTD_decompressStream(ctx->dstream, &output, &input);
 
-    if (ZSTD_isError(ret)) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                        "ZSTD_decompressStream() failed: %d, %s", ctx->flush,
-                        ZSTD_getErrorName(ret));
-        return NGX_ERROR;
-    }
-
-    ctx->next_in = (u_char *) input.src + input.pos;
-    ctx->avail_in = input.size - input.pos;
-
-    ctx->next_out = (u_char *) output.dst + output.pos;
-    ctx->avail_out = output.size - output.pos;
-
-    ngx_log_debug5(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "ZSTD_decompressStream out: ni:%p no:%p ai:%ud ao:%ud ret:%ud",
-                   ctx->next_in, ctx->next_out,
-                   ctx->avail_in, ctx->avail_out,
-                   ret);
-
-    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "unzstd in_buf:%p pos:%p",
-                   ctx->in_buf, ctx->in_buf->pos);
-
-    if (ctx->next_in) {
-        ctx->in_buf->pos = ctx->next_in;
-
-        if (ctx->avail_in == 0) {
-            ctx->next_in = NULL;
-        }
-    }
-
-    ctx->out_buf->last = ctx->next_out;
-
-    if (ctx->avail_out == 0) {
-
-        /* unzstd wants to output some more data */
-
-        cl = ngx_alloc_chain_link(r->pool);
-        if (cl == NULL) {
+        if (ZSTD_isError(ret)) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                            "ZSTD_decompressStream() failed: %d, %s", ctx->flush,
+                            ZSTD_getErrorName(ret));
             return NGX_ERROR;
         }
 
-        cl->buf = ctx->out_buf;
-        cl->next = NULL;
-        *ctx->last_out = cl;
-        ctx->last_out = &cl->next;
+        ctx->next_in = (u_char *) input.src + input.pos;
+        ctx->avail_in = input.size - input.pos;
 
-        ctx->redo = 1;
+        ctx->next_out = (u_char *) output.dst + output.pos;
+        ctx->avail_out = output.size - output.pos;
 
-        return NGX_AGAIN;
+        ngx_log_debug5(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                    "ZSTD_decompressStream out: ni:%p no:%p ai:%ud ao:%ud ret:%ud",
+                    ctx->next_in, ctx->next_out,
+                    ctx->avail_in, ctx->avail_out,
+                    ret);
+
+        ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                    "unzstd in_buf:%p pos:%p",
+                    ctx->in_buf, ctx->in_buf->pos);
+
+        if (ctx->next_in) {
+            ctx->in_buf->pos = ctx->next_in;
+
+            if (ctx->avail_in == 0) {
+                ctx->next_in = NULL;
+            }
+        }
+
+        ctx->out_buf->last = ctx->next_out;
+
+        if (ctx->avail_out == 0) {
+
+            /* unzstd wants to output some more data */
+
+            cl = ngx_alloc_chain_link(r->pool);
+            if (cl == NULL) {
+                return NGX_ERROR;
+            }
+
+            cl->buf = ctx->out_buf;
+            cl->next = NULL;
+            *ctx->last_out = cl;
+            ctx->last_out = &cl->next;
+
+            ctx->redo = 1;
+
+            return NGX_AGAIN;
+        }
     }
 
     ctx->redo = 0;
@@ -682,53 +684,16 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 
     if (ctx->flush == ZSTD_IN_BUF_FINISH && ctx->avail_in == 0) {
 
-        input.src = NULL;
-        input.size = 0;
-        input.pos = 0;
-
-        while (1) {
-            ret = ZSTD_decompressStream(ctx->dstream, &output, &input);
-
-            ctx->next_out = (u_char *)output.dst + output.pos;
-            ctx->avail_out = output.size - output.pos;
-
-            if (ZSTD_isError(ret)) {
-                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                            "ZSTD final flush failed: %s (code %zu)",
-                            ZSTD_getErrorName(ret), ret);
-                return NGX_ERROR;
-            }
-
-            if (ctx->avail_out == 0) {
-                cl = ngx_alloc_chain_link(r->pool);
-                if (cl == NULL) {
-                    return NGX_ERROR;
-                }
-
-                cl->buf = ctx->out_buf;
-                cl->next = NULL;
-                *ctx->last_out = cl;
-                ctx->last_out = &cl->next;
-
-                if (ngx_http_unzstd_filter_get_buf(r, ctx) != NGX_OK) {
-                    return NGX_ERROR;
-                }
-
-                output.dst = ctx->next_out;
-                output.size = ctx->avail_out;
-                output.pos = 0;
-            }
-
-            if (ret == 0) {
-                if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
-                    return NGX_ERROR;
-                }
-                return NGX_OK;
-            }
-
-            ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                       "ZSTD still needs flush: %uz bytes remaining", ret);
+        if (ret > 0) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                          "zstd: %s", ZSTD_getErrorName(ret));
         }
+            
+        if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
+            return NGX_ERROR;
+        }
+
+        return NGX_OK;
     }
 
     if (ctx->in == NULL) {
