@@ -587,26 +587,19 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
     input.src = ctx->next_in;
     input.size = ctx->avail_in;
     input.pos = 0;
-    output.dst = ctx->next_out;
-    output.size = ctx->avail_out;
-    output.pos = 0;
 
-    ret = ZSTD_decompressStream(ctx->dstream, &output, &input);
+    while (input.pos < input.size) {
 
-    if (ZSTD_isError(ret)) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "ZSTD_decompressStream() failed: %d, %s", ctx->flush,
-                      ZSTD_getErrorName(ret));
-        return NGX_ERROR;
-    }
+        output.dst = ctx->next_out;
+        output.size = ctx->avail_out;
+        output.pos = 0;
 
-    if (output.pos == output.size && ret > 0) {
-        ZSTD_decompressStream(ctx->dstream, &output, &input);
+        ret = ZSTD_decompressStream(ctx->dstream, &output, &input);
 
         if (ZSTD_isError(ret)) {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                        "ZSTD_decompressStream() failed: %d, %s", ctx->flush,
-                        ZSTD_getErrorName(ret));
+                          "ZSTD_decompressStream() failed: %d, %s", ctx->flush,
+                          ZSTD_getErrorName(ret));
             return NGX_ERROR;
         }
     }
