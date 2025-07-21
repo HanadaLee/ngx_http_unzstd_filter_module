@@ -687,6 +687,7 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
         if (ret > 0) {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                           "zstd: %s", ZSTD_getErrorName(ret));
+            return NGX_AGAIN;
         }
             
         if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
