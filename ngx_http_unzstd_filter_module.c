@@ -65,7 +65,8 @@ static ngx_int_t ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 static ngx_int_t ngx_http_unzstd_filter_inflate_end(ngx_http_request_t *r,
     ngx_http_unzstd_ctx_t *ctx);
 
-static void *ngx_http_unzstd_filter_alloc(void *opaque, size_t size);
+static void *ngx_http_unzstd_filter_alloc(void *opaque, u_int items,
+    u_int size);
 static void ngx_http_unzstd_filter_free(void *opaque, void *address);
 
 static ngx_int_t ngx_http_unzstd_filter_init(ngx_conf_t *cf);
