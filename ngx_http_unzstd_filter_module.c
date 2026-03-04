@@ -632,10 +632,12 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
                 "unzstd in_buf:%p pos:%p",
                 ctx->in_buf, ctx->in_buf->pos);
 
-    ctx->in_buf->pos = ctx->next_in;
-    if (ctx->avail_in == 0) {
-        ctx->next_in = NULL;
-        ctx->in_buf->pos = ctx->in_buf->last;
+    if (ctx->next_in) {
+        ctx->in_buf->pos = ctx->next_in;
+
+        if (ctx->avail_in == 0) {
+            ctx->next_in = NULL;
+        }
     }
 
     ctx->out_buf->last = ctx->next_out;
@@ -695,9 +697,10 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 
     if (ctx->flush == ZSTD_IN_BUF_FINISH && ctx->avail_in == 0) {
 
-        if (ret > 0) {
+        if (ret != 0) {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                          "zstd: %s", ZSTD_getErrorName(ret));
+                          "ZSTD_decompressStream() returned %uz on response end",
+                          ret);
             return NGX_ERROR;
         }
 
