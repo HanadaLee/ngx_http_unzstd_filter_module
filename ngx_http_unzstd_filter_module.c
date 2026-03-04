@@ -782,7 +782,7 @@ ngx_http_unzstd_filter_inflate_end(ngx_http_request_t *r,
 static void *
 ngx_http_unzstd_filter_alloc(void *opaque, size_t size)
 {
-    ngx_http_zstd_ctx_t *ctx = opaque;
+    ngx_http_unzstd_ctx_t *ctx = opaque;
 
     void  *p;
 
