@@ -7,7 +7,7 @@ ngx_found=no
 
 if [ -n "$ZSTD_INC" ] && [ -n "$ZSTD_LIB" ]; then
 
-    # Use user-specified paths; prefer static library over dynamic
+    # Use user-specified paths; prefer shared library over static
 
     ngx_feature="zstd library in \$ZSTD_LIB"
     ngx_feature_name=
@@ -16,10 +16,10 @@ if [ -n "$ZSTD_INC" ] && [ -n "$ZSTD_LIB" ]; then
     ngx_feature_path="$ZSTD_INC"
     ngx_feature_test="ZSTD_versionNumber();"
 
-    if [ -f "$ZSTD_LIB/libzstd.a" ]; then
-        ngx_feature_libs="$ZSTD_LIB/libzstd.a"
-    else
+    if [ -f "$ZSTD_LIB/libzstd.so" ] || [ -f "$ZSTD_LIB/libzstd.dylib" ]; then
         ngx_feature_libs="-L$ZSTD_LIB -lzstd"
+    else
+        ngx_feature_libs="$ZSTD_LIB/libzstd.a"
     fi
 
     . auto/feature
@@ -52,10 +52,10 @@ else
             ngx_feature="zstd library in ${ngx_zstd_prefix}"
             ngx_feature_path="${ngx_zstd_prefix}/include"
 
-            if [ -f "${ngx_zstd_prefix}/lib/libzstd.a" ]; then
-                ngx_feature_libs="${ngx_zstd_prefix}/lib/libzstd.a"
-            else
+            if [ -f "${ngx_zstd_prefix}/lib/libzstd.so" ] || [ -f "${ngx_zstd_prefix}/lib/libzstd.dylib" ]; then
                 ngx_feature_libs="-L${ngx_zstd_prefix}/lib -lzstd"
+            else
+                ngx_feature_libs="${ngx_zstd_prefix}/lib/libzstd.a"
             fi
 
             . auto/feature
