@@ -590,10 +590,10 @@ ngx_http_unzstd_filter_add_data(ngx_http_request_t *r,
                    "unzstd in_buf:%p src:%p size:%uz",
                    ctx->in_buf, ctx->buffer_in.src, ctx->buffer_in.size);
 
-    if (ctx->in_buf->last_buf || ctx->in_buf->last_in_chain) {
+    if (ctx->in_buf->last_buf) {
         ctx->flush = NGX_HTTP_UNZSTD_IN_BUF_FINISH;
 
-    } else if (ctx->in_buf->flush) {
+    } else if (ctx->in_buf->flush || ctx->in_buf->last_in_chain) {
         ctx->flush = NGX_HTTP_UNZSTD_IN_BUF_SYNC_FLUSH;
 
     } else if (ctx->buffer_in.size == 0) {
@@ -715,20 +715,6 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 
         ctx->flush = NGX_HTTP_UNZSTD_IN_BUF_NO_FLUSH;
 
-        /*
-         * rc == 0 means the zstd frame is fully decoded; finalize now
-         * rather than waiting for a last_buf marker that may not arrive
-         * when proxy_buffering is off (upstream Connection: close +
-         * chunked transfer delivers the terminal chunk separately).
-         */
-        if (rc == 0) {
-            if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
-                return NGX_ERROR;
-            }
-
-            return NGX_OK;
-        }
-
         cl = ngx_alloc_chain_link(r->pool);
         if (cl == NULL) {
             return NGX_ERROR;
@@ -760,16 +746,6 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
     if (ctx->flush == NGX_HTTP_UNZSTD_IN_BUF_FINISH
         && ctx->buffer_in.pos == ctx->buffer_in.size)
     {
-        /*
-         * ZSTD_decompressStream() return value semantics:
-         *   0   - current frame fully decoded, no more data expected
-         *   > 0 - hint for next recommended input size, not an error;
-         *         may indicate more frames follow or end of single frame
-         *
-         * When all input has been consumed on the last buffer, treat
-         * both rc == 0 and rc > 0 as successful completion.
-         */
-
         if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
             return NGX_ERROR;
         }
