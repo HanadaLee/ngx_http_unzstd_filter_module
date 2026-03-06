@@ -715,6 +715,20 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 
         ctx->flush = NGX_HTTP_UNZSTD_IN_BUF_NO_FLUSH;
 
+        /*
+         * rc == 0 means the zstd frame is fully decoded; finalize now
+         * rather than waiting for a last_buf marker that may not arrive
+         * when proxy_buffering is off (upstream Connection: close +
+         * chunked transfer delivers the terminal chunk separately).
+         */
+        if (rc == 0) {
+            if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
+                return NGX_ERROR;
+            }
+
+            return NGX_OK;
+        }
+
         cl = ngx_alloc_chain_link(r->pool);
         if (cl == NULL) {
             return NGX_ERROR;
