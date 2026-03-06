@@ -654,7 +654,7 @@ static ngx_int_t
 ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
     ngx_http_unzstd_ctx_t *ctx)
 {
-    size_t        rc;
+    size_t        rc, prev_in_pos;
     ngx_uint_t    more;
     ngx_buf_t    *b;
     ngx_chain_t  *cl;
@@ -665,6 +665,8 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
                    ctx->buffer_in.src, ctx->buffer_out.dst,
                    ctx->buffer_in.pos, ctx->buffer_out.pos,
                    ctx->flush, ctx->redo);
+
+    prev_in_pos = ctx->buffer_in.pos;
 
     rc = ZSTD_decompressStream(ctx->dstream, &ctx->buffer_out, &ctx->buffer_in);
 
@@ -683,7 +685,7 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
 
     more = ctx->buffer_in.pos < ctx->buffer_in.size;
 
-    ctx->in_buf->pos += ctx->buffer_in.pos;
+    ctx->in_buf->pos += ctx->buffer_in.pos - prev_in_pos;
     ctx->out_buf->last = ctx->out_buf->pos + ctx->buffer_out.pos;
 
     if (!more) {
