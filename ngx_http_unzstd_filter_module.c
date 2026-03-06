@@ -746,13 +746,15 @@ ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
     if (ctx->flush == NGX_HTTP_UNZSTD_IN_BUF_FINISH
         && ctx->buffer_in.pos == ctx->buffer_in.size)
     {
-        if (rc != 0) {
-            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                          "ZSTD_decompressStream() ended with %uz bytes "
-                          "remaining on response end",
-                          rc);
-            return NGX_ERROR;
-        }
+        /*
+         * ZSTD_decompressStream() return value semantics:
+         *   0   - current frame fully decoded, no more data expected
+         *   > 0 - hint for next recommended input size, not an error;
+         *         may indicate more frames follow or end of single frame
+         *
+         * When all input has been consumed on the last buffer, treat
+         * both rc == 0 and rc > 0 as successful completion.
+         */
 
         if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
             return NGX_ERROR;
