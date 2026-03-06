@@ -3,37 +3,77 @@ ngx_module_type=HTTP_FILTER
 ngx_module_name=ngx_http_unzstd_filter_module
 ngx_module_srcs="$ngx_addon_dir/ngx_http_unzstd_filter_module.c"
 
-ngx_feature="zstd library"
-ngx_feature_name=
-ngx_feature_run=no
-ngx_feature_incs="#include <zstd.h>"
-ngx_feature_path=
-ngx_feature_libs="-lzstd"
-ngx_feature_test="ZSTD_versionNumber();"
-. auto/feature
+ngx_found=no
 
-if [ $ngx_found = no ]; then
+if [ -n "$ZSTD_INC" ] && [ -n "$ZSTD_LIB" ]; then
 
-    # Try common non-default installation paths
+    # Use user-specified paths; prefer static library over dynamic
 
-    for ngx_zstd_prefix in /usr/local /opt/local /opt/homebrew; do
-        ngx_feature="zstd library in ${ngx_zstd_prefix}"
-        ngx_feature_path="${ngx_zstd_prefix}/include"
-        ngx_feature_libs="-L${ngx_zstd_prefix}/lib -lzstd"
-        . auto/feature
+    ngx_feature="zstd library in \$ZSTD_LIB"
+    ngx_feature_name=
+    ngx_feature_run=no
+    ngx_feature_incs="#include <zstd.h>"
+    ngx_feature_path="$ZSTD_INC"
+    ngx_feature_test="ZSTD_versionNumber();"
 
-        if [ $ngx_found = yes ]; then
-            break
-        fi
-    done
+    if [ -f "$ZSTD_LIB/libzstd.a" ]; then
+        ngx_feature_libs="$ZSTD_LIB/libzstd.a"
+    else
+        ngx_feature_libs="-L$ZSTD_LIB -lzstd"
+    fi
 
-fi
+    . auto/feature
 
-if [ $ngx_found = no ]; then
-    echo
-    echo $0: error: ngx_http_unzstd_filter_module requires the zstd library.
-    echo
-    exit 1
+    if [ $ngx_found = no ]; then
+        echo
+        echo "$0: error: ngx_http_unzstd_filter_module: zstd not found in ZSTD_INC=$ZSTD_INC and ZSTD_LIB=$ZSTD_LIB"
+        echo
+        exit 1
+    fi
+
+else
+
+    # Try system default paths
+
+    ngx_feature="zstd library"
+    ngx_feature_name=
+    ngx_feature_run=no
+    ngx_feature_incs="#include <zstd.h>"
+    ngx_feature_path=
+    ngx_feature_libs="-lzstd"
+    ngx_feature_test="ZSTD_versionNumber();"
+    . auto/feature
+
+    if [ $ngx_found = no ]; then
+
+        # Try common non-default installation paths
+
+        for ngx_zstd_prefix in /usr/local /opt/local /opt/homebrew; do
+            ngx_feature="zstd library in ${ngx_zstd_prefix}"
+            ngx_feature_path="${ngx_zstd_prefix}/include"
+
+            if [ -f "${ngx_zstd_prefix}/lib/libzstd.a" ]; then
+                ngx_feature_libs="${ngx_zstd_prefix}/lib/libzstd.a"
+            else
+                ngx_feature_libs="-L${ngx_zstd_prefix}/lib -lzstd"
+            fi
+
+            . auto/feature
+
+            if [ $ngx_found = yes ]; then
+                break
+            fi
+        done
+
+    fi
+
+    if [ $ngx_found = no ]; then
+        echo
+        echo $0: error: ngx_http_unzstd_filter_module requires the zstd library.
+        echo
+        exit 1
+    fi
+
 fi
 
 ngx_module_incs="$ngx_feature_path"
