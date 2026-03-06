@@ -1,8 +1,42 @@
 ngx_addon_name=ngx_http_unzstd_filter_module
 ngx_module_type=HTTP_FILTER
 ngx_module_name=ngx_http_unzstd_filter_module
-ngx_module_incs="/usr/include"
 ngx_module_srcs="$ngx_addon_dir/ngx_http_unzstd_filter_module.c"
-ngx_module_libs="-lzstd"
+
+ngx_feature="zstd library"
+ngx_feature_name=
+ngx_feature_run=no
+ngx_feature_incs="#include <zstd.h>"
+ngx_feature_path=
+ngx_feature_libs="-lzstd"
+ngx_feature_test="ZSTD_versionNumber();"
+. auto/feature
+
+if [ $ngx_found = no ]; then
+
+    # Try common non-default installation paths
+
+    for ngx_zstd_prefix in /usr/local /opt/local /opt/homebrew; do
+        ngx_feature="zstd library in ${ngx_zstd_prefix}"
+        ngx_feature_path="${ngx_zstd_prefix}/include"
+        ngx_feature_libs="-L${ngx_zstd_prefix}/lib -lzstd"
+        . auto/feature
+
+        if [ $ngx_found = yes ]; then
+            break
+        fi
+    done
+
+fi
+
+if [ $ngx_found = no ]; then
+    echo
+    echo $0: error: ngx_http_unzstd_filter_module requires the zstd library.
+    echo
+    exit 1
+fi
+
+ngx_module_incs="$ngx_feature_path"
+ngx_module_libs="$ngx_feature_libs"
 
 . auto/module

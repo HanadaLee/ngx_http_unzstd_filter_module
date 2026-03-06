@@ -1,7 +1,6 @@
 
 /*
  * Copyright (C) Hanada
- * Copyright (C) Alex Zhang
  */
 
 
