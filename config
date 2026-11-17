@@ -1,10 +1,16 @@
+have=NGX_HTTP_GZIP . auto/have
+
 ngx_addon_name=ngx_http_unzstd_filter_module
 ngx_module_type=HTTP_FILTER
 ngx_module_name=ngx_http_unzstd_filter_module
 ngx_module_srcs="$ngx_addon_dir/ngx_http_unzstd_filter_module.c"
 ngx_module_order="$ngx_module_name \
-                  ngx_http_unbrotli_filter_module \
-                  ngx_http_gunzip_filter_module"
+                  ngx_http_userid_filter_module \
+                  ngx_http_headers_filter_module \
+                  ngx_http_copy_filter_module \
+                  ngx_http_range_body_filter_module \
+                  ngx_http_not_modified_filter_module \
+                  ngx_http_slice_filter_module"
 
 ngx_found=no
 
@@ -15,15 +21,14 @@ if [ -n "$ZSTD_INC" ] && [ -n "$ZSTD_LIB" ]; then
     ngx_feature="zstd library in \$ZSTD_LIB"
     ngx_feature_name=
     ngx_feature_run=no
-    ngx_feature_incs="#define ZSTD_STATIC_LINKING_ONLY
-#include <zstd.h>"
+    ngx_feature_incs="#include <zstd.h>"
     ngx_feature_path="$ZSTD_INC"
-    ngx_feature_test="ZSTD_customMem cmem = { NULL, NULL, NULL };
+    ngx_feature_test="
 #if ZSTD_VERSION_NUMBER < 10400
 #error libzstd 1.4.0 or newer is required
 #endif
-ZSTD_DStream *dstream = ZSTD_createDStream_advanced(cmem);
-ZSTD_DDict *ddict = ZSTD_createDDict_byReference(NULL, 0);
+ZSTD_DStream *dstream = ZSTD_createDCtx();
+ZSTD_DDict *ddict = ZSTD_createDDict(NULL, 0);
 (void) dstream;
 (void) ddict;"
 
@@ -49,16 +54,15 @@ else
     ngx_feature="zstd library"
     ngx_feature_name=
     ngx_feature_run=no
-    ngx_feature_incs="#define ZSTD_STATIC_LINKING_ONLY
-#include <zstd.h>"
+    ngx_feature_incs="#include <zstd.h>"
     ngx_feature_path=
     ngx_feature_libs="-lzstd"
-    ngx_feature_test="ZSTD_customMem cmem = { NULL, NULL, NULL };
+    ngx_feature_test="
 #if ZSTD_VERSION_NUMBER < 10400
 #error libzstd 1.4.0 or newer is required
 #endif
-ZSTD_DStream *dstream = ZSTD_createDStream_advanced(cmem);
-ZSTD_DDict *ddict = ZSTD_createDDict_byReference(NULL, 0);
+ZSTD_DStream *dstream = ZSTD_createDCtx();
+ZSTD_DDict *ddict = ZSTD_createDDict(NULL, 0);
 (void) dstream;
 (void) ddict;"
     . auto/feature
@@ -103,15 +107,16 @@ ngx_module_libs="$ngx_feature_libs"
 if [ "$ngx_module_link" != DYNAMIC ]; then
     # ngx_module_order doesn't work with static modules,
     # so we must re-order here.
-    if echo $HTTP_FILTER_MODULES | grep ngx_http_unbrotli_filter_module >/dev/null; then
-        next=ngx_http_unbrotli_filter_module
-    elif echo $HTTP_FILTER_MODULES | grep ngx_http_gunzip_filter_module >/dev/null; then
-        next=ngx_http_gunzip_filter_module
-    elif echo $HTTP_FILTER_MODULES | grep ngx_http_sub_filter_module >/dev/null; then
-        next=ngx_http_sub_filter_module
-    else
-        next=ngx_http_charset_filter_module
-    fi
+    for next in ngx_http_gunzip_filter_module \
+                ngx_http_addition_filter_module ngx_http_sub_filter_module \
+                ngx_http_image_filter_module ngx_http_xslt_filter_module \
+                ngx_http_charset_filter_module ngx_http_ssi_filter_module \
+                ngx_http_postpone_filter_module
+    do
+        case " $HTTP_FILTER_MODULES " in
+            *" $next "*) break ;;
+        esac
+    done
 
     HTTP_FILTER_MODULES=`echo $HTTP_FILTER_MODULES \
                          | sed "s/$ngx_module_name//" \

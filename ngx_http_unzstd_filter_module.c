@@ -1,16 +1,15 @@
-
 /*
  * Copyright (C) Hanada
+ * Copyright (C) Igor Sysoev
+ * Copyright (C) Nginx, Inc.
+ * Copyright (C) Google Inc.
+ * Copyright (C) Alex Zhang
  */
 
 
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
-
-#ifndef ZSTD_STATIC_LINKING_ONLY
-#define ZSTD_STATIC_LINKING_ONLY
-#endif
 #include <zstd.h>
 
 #if (NGX_EXPR)
@@ -18,87 +17,77 @@
 #endif
 
 
-#define NGX_HTTP_UNZSTD_IN_BUF_NO_FLUSH        0
-#define NGX_HTTP_UNZSTD_IN_BUF_SYNC_FLUSH      1
-#define NGX_HTTP_UNZSTD_IN_BUF_FINISH          2
+#define NGX_HTTP_UNZSTD_PROCESS    0
+#define NGX_HTTP_UNZSTD_FLUSH      1
+#define NGX_HTTP_UNZSTD_FINISH     2
+#define NGX_HTTP_UNZSTD_CHUNK      (64 * 1024)
 
 
 typedef struct {
-    ngx_str_t                    dict_file;
-    ZSTD_DDict                  *dict;
+    ngx_str_t    dict_file;
+    ZSTD_DDict  *dict;
 } ngx_http_unzstd_main_conf_t;
 
 
 typedef struct {
 #if (NGX_EXPR)
-    ngx_array_t                 *enable;
-    ngx_array_t                 *force;
+    ngx_array_t  *enable;
+    ngx_array_t  *force;
 #else
-    ngx_flag_t                   enable;
-    ngx_flag_t                   force;
+    ngx_flag_t    enable;
+    ngx_flag_t    force;
 #endif
-    ngx_bufs_t                   bufs;
+    ngx_bufs_t    bufs;
 } ngx_http_unzstd_conf_t;
 
 
 typedef struct {
-    ngx_chain_t                 *in;
-    ngx_chain_t                 *free;
-    ngx_chain_t                 *busy;
-    ngx_chain_t                 *out;
-    ngx_chain_t                **last_out;
-
-    ngx_buf_t                   *in_buf;
-    ngx_buf_t                   *out_buf;
-    ngx_int_t                    bufs;
-
-    ZSTD_inBuffer                buffer_in;
-    ZSTD_outBuffer               buffer_out;
-    ZSTD_DStream                *dstream;
-
-    unsigned                     started:1;
-    unsigned                     flush:2;
-    unsigned                     redo:1;
-    unsigned                     frame_done:1;
-    unsigned                     done:1;
-    unsigned                     nomem:1;
-
-    ngx_http_request_t          *request;
+    ngx_http_request_t      *request;
+    ngx_http_unzstd_conf_t  *conf;
+    ngx_chain_t             *in;
+    ngx_chain_t             *out;
+    ngx_chain_t            **last_out;
+    ngx_chain_t             *free;
+    ngx_chain_t             *busy;
+    ngx_buf_t               *in_buf;
+    ngx_buf_t               *out_buf;
+    ZSTD_DCtx               *state;
+    off_t                    bytes_in;
+    off_t                    bytes_out;
+    ngx_uint_t               bufs;
+    ngx_uint_t               operation;
+    unsigned                 initialized:1;
+    unsigned                 complete:1;
+    unsigned                 done:1;
 } ngx_http_unzstd_ctx_t;
 
 
 static ngx_int_t ngx_http_unzstd_header_filter(ngx_http_request_t *r);
 static ngx_int_t ngx_http_unzstd_body_filter(ngx_http_request_t *r,
     ngx_chain_t *in);
-
-static ngx_int_t ngx_http_unzstd_filter_inflate_start(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx);
-static ngx_int_t ngx_http_unzstd_filter_add_data(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx);
-static ngx_int_t ngx_http_unzstd_filter_get_buf(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx);
-static ngx_int_t ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx);
-static ngx_int_t ngx_http_unzstd_filter_inflate_end(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx);
-
-static ngx_int_t ngx_http_zstd_ok(ngx_http_request_t *r);
-static ngx_int_t ngx_http_zstd_accept_encoding(ngx_str_t *ae);
-static ngx_uint_t ngx_http_zstd_quantity(u_char *p, u_char *last);
-
+static ngx_int_t ngx_http_unzstd_get_buffer(ngx_http_unzstd_ctx_t *ctx);
+static ngx_int_t ngx_http_unzstd_output(ngx_http_unzstd_ctx_t *ctx);
+static ngx_int_t ngx_http_unzstd_result(ngx_http_unzstd_ctx_t *ctx,
+    ngx_flag_t  more);
+static void ngx_http_unzstd_cleanup(void *data);
+static ngx_int_t ngx_http_unzstd_init(ngx_http_unzstd_ctx_t *ctx);
+static ngx_int_t ngx_http_unzstd_process(ngx_http_unzstd_ctx_t *ctx);
+static void ngx_http_unzstd_close(ngx_http_unzstd_ctx_t *ctx);
+static ngx_int_t ngx_http_unzstd_ok(ngx_http_request_t *r);
+static ngx_int_t ngx_http_unzstd_accept_encoding(ngx_str_t *ae);
+static ngx_uint_t ngx_http_unzstd_quantity(u_char *p, u_char *last);
+static ngx_int_t ngx_http_unzstd_cache_control(ngx_http_request_t *r);
+static ngx_int_t ngx_http_unzstd_policy(ngx_http_request_t *r);
+static void *ngx_http_unzstd_create_conf(ngx_conf_t *cf);
+static char *ngx_http_unzstd_merge_conf(ngx_conf_t *cf, void *parent,
+    void *child);
 static ngx_int_t ngx_http_unzstd_filter_init(ngx_conf_t *cf);
 static void *ngx_http_unzstd_create_main_conf(ngx_conf_t *cf);
 static char *ngx_http_unzstd_init_main_conf(ngx_conf_t *cf, void *conf);
-static void *ngx_http_unzstd_create_conf(ngx_conf_t *cf);
-static char *ngx_http_unzstd_merge_conf(ngx_conf_t *cf,
-    void *parent, void *child);
 static void ngx_http_unzstd_free_ddict(void *data);
 
-static void *ngx_http_unzstd_filter_alloc(void *opaque, size_t size);
-static void ngx_http_unzstd_filter_free(void *opaque, void *address);
 
-
-static ngx_command_t  ngx_http_unzstd_filter_commands[] = {
+static ngx_command_t  ngx_http_unzstd_commands[] = {
 
     { ngx_string("unzstd"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF
@@ -150,73 +139,87 @@ static ngx_command_t  ngx_http_unzstd_filter_commands[] = {
 };
 
 
-static ngx_http_module_t  ngx_http_unzstd_filter_module_ctx = {
-    NULL,                                   /* preconfiguration */
-    ngx_http_unzstd_filter_init,            /* postconfiguration */
+static ngx_http_module_t  ngx_http_unzstd_module_ctx = {
+    NULL, /* preconfiguration */
+    ngx_http_unzstd_filter_init, /* postconfiguration */
 
-    ngx_http_unzstd_create_main_conf,       /* create main configuration */
-    ngx_http_unzstd_init_main_conf,         /* init main configuration */
+    ngx_http_unzstd_create_main_conf, /* create main configuration */
+    ngx_http_unzstd_init_main_conf, /* init main configuration */
 
-    NULL,                                   /* create server configuration */
-    NULL,                                   /* merge server configuration */
+    NULL, /* create server configuration */
+    NULL, /* merge server configuration */
 
-    ngx_http_unzstd_create_conf,            /* create location configuration */
-    ngx_http_unzstd_merge_conf              /* merge location configuration */
+    ngx_http_unzstd_create_conf, /* create location configuration */
+    ngx_http_unzstd_merge_conf /* merge location configuration */
 };
 
 
 ngx_module_t  ngx_http_unzstd_filter_module = {
     NGX_MODULE_V1,
-    &ngx_http_unzstd_filter_module_ctx,     /* module context */
-    ngx_http_unzstd_filter_commands,        /* module directives */
-    NGX_HTTP_MODULE,                        /* module type */
-    NULL,                                   /* init master */
-    NULL,                                   /* init module */
-    NULL,                                   /* init process */
-    NULL,                                   /* init thread */
-    NULL,                                   /* exit thread */
-    NULL,                                   /* exit process */
-    NULL,                                   /* exit master */
+    &ngx_http_unzstd_module_ctx, /* module context */
+    ngx_http_unzstd_commands, /* module directives */
+    NGX_HTTP_MODULE, /* module type */
+    NULL, /* init master */
+    NULL, /* init module */
+    NULL, /* init process */
+    NULL, /* init thread */
+    NULL, /* exit thread */
+    NULL, /* exit process */
+    NULL, /* exit master */
     NGX_MODULE_V1_PADDING
 };
 
 
 static ngx_http_output_header_filter_pt  ngx_http_next_header_filter;
 static ngx_http_output_body_filter_pt    ngx_http_next_body_filter;
+static ngx_buf_t                        ngx_http_unzstd_empty_buf;
 
 
 static ngx_int_t
 ngx_http_unzstd_header_filter(ngx_http_request_t *r)
 {
+    ngx_str_t               *value;
+    ngx_flag_t               enabled, force;
+    ngx_pool_cleanup_t      *cln;
     ngx_http_unzstd_ctx_t   *ctx;
     ngx_http_unzstd_conf_t  *conf;
 
-    conf = ngx_http_get_module_loc_conf(r, ngx_http_unzstd_filter_module);
-
-    /* TODO support multiple content-codings */
-    /* TODO ignore content encoding? */
+    conf = ngx_http_get_module_loc_conf(r,
+                                        ngx_http_unzstd_filter_module);
 
 #if (NGX_EXPR)
-    if (!ngx_http_get_expr_flag_value(r, conf->enable)
+    enabled = ngx_http_get_expr_flag_value(r, conf->enable);
 #else
-    if (!conf->enable
+    enabled = conf->enable;
 #endif
-        || r->headers_out.content_encoding == NULL
-        || r->headers_out.content_encoding->value.len != 4
-        || ngx_strncasecmp(r->headers_out.content_encoding->value.data,
-                           (u_char *) "zstd", 4) != 0)
+
+    if (!enabled || r->headers_out.content_encoding == NULL
+        || r->headers_out.content_range != NULL
+        || r->headers_out.status == NGX_HTTP_PARTIAL_CONTENT
+        || ngx_http_unzstd_cache_control(r) != NGX_OK)
     {
         return ngx_http_next_header_filter(r);
     }
 
 #if (NGX_EXPR)
-    if (!ngx_http_get_expr_flag_value(r, conf->force)) {
+    force = ngx_http_get_expr_flag_value(r, conf->force);
 #else
-    if (!conf->force) {
+    force = conf->force;
 #endif
+
+    value = &r->headers_out.content_encoding->value;
+    if (value->len != sizeof("zstd") - 1
+        || ngx_strncasecmp(value->data, (u_char *) "zstd", value->len) != 0)
+    {
+        return ngx_http_next_header_filter(r);
+    }
+
+    if (!force) {
         r->gzip_vary = 1;
 
-        if (ngx_http_zstd_ok(r) == NGX_OK) {
+        if (ngx_http_unzstd_ok(r) == NGX_OK
+            && ngx_http_unzstd_policy(r) == NGX_OK)
+        {
             return ngx_http_next_header_filter(r);
         }
     }
@@ -226,12 +229,19 @@ ngx_http_unzstd_header_filter(ngx_http_request_t *r)
         return NGX_ERROR;
     }
 
-    ngx_http_set_ctx(r, ctx, ngx_http_unzstd_filter_module);
+    cln = ngx_pool_cleanup_add(r->pool, 0);
+    if (cln == NULL) {
+        return NGX_ERROR;
+    }
 
     ctx->request = r;
+    ctx->conf = conf;
+    ctx->last_out = &ctx->out;
+    cln->handler = ngx_http_unzstd_cleanup;
+    cln->data = ctx;
 
+    ngx_http_set_ctx(r, ctx, ngx_http_unzstd_filter_module);
     r->filter_need_in_memory = 1;
-
     r->headers_out.content_encoding->hash = 0;
     r->headers_out.content_encoding = NULL;
 
@@ -246,141 +256,353 @@ ngx_http_unzstd_header_filter(ngx_http_request_t *r)
 static ngx_int_t
 ngx_http_unzstd_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
-    size_t                  free_rc;
+    off_t                   before_in, before_out;
     ngx_int_t               rc;
-    ngx_uint_t              flush;
+    ngx_uint_t              blocked;
     ngx_chain_t            *cl;
     ngx_http_unzstd_ctx_t  *ctx;
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_unzstd_filter_module);
 
-    if (ctx == NULL || ctx->done) {
+    if (ctx == NULL || ctx->done || r->header_only) {
         return ngx_http_next_body_filter(r, in);
     }
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "http unzstd filter");
 
-    if (!ctx->started) {
-        if (ngx_http_unzstd_filter_inflate_start(r, ctx) != NGX_OK) {
+    for (cl = in; cl; cl = cl->next) {
+        if (ngx_buf_size(cl->buf) && !ngx_buf_in_memory(cl->buf)) {
+            ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
+                          "unzstd filter received a file buffer");
             goto failed;
         }
     }
 
-    if (in) {
-        if (ngx_chain_add_copy(r->pool, &ctx->in, in) != NGX_OK) {
-            goto failed;
-        }
+    if (ngx_chain_add_copy(r->pool, &ctx->in, in) != NGX_OK) {
+        goto failed;
     }
 
-    if (ctx->nomem) {
-
-        /* flush busy buffers */
-
-        if (ngx_http_next_body_filter(r, NULL) == NGX_ERROR) {
+    if (!ctx->initialized) {
+        if (ngx_http_unzstd_init(ctx) != NGX_OK) {
             goto failed;
         }
 
-        cl = NULL;
-
-        ngx_chain_update_chains(r->pool, &ctx->free, &ctx->busy, &cl,
-                                (ngx_buf_tag_t)
-                                &ngx_http_unzstd_filter_module);
-        ctx->nomem = 0;
-        flush = 0;
-
-    } else {
-        flush = ctx->busy ? 1 : 0;
+        ctx->initialized = 1;
     }
 
     for ( ;; ) {
-
-        /* cycle while we can write to a client */
+        blocked = 0;
 
         for ( ;; ) {
+            if (ctx->in_buf == NULL) {
+                if (ctx->in == NULL) {
+                    break;
+                }
 
-            rc = ngx_http_unzstd_filter_add_data(r, ctx);
+                cl = ctx->in;
+                ctx->in = cl->next;
+                ctx->in_buf = cl->buf;
+                ngx_free_chain(r->pool, cl);
 
-            if (rc == NGX_DECLINED) {
-                break;
+                if (ctx->in_buf->last_buf
+                    || (r != r->main && ctx->in_buf->last_in_chain))
+                {
+                    ctx->operation = NGX_HTTP_UNZSTD_FINISH;
+
+                } else if (ctx->in_buf->flush) {
+                    ctx->operation = NGX_HTTP_UNZSTD_FLUSH;
+
+                } else {
+                    ctx->operation = NGX_HTTP_UNZSTD_PROCESS;
+                }
+
+                if (ngx_buf_size(ctx->in_buf) == 0
+                    && ctx->operation == NGX_HTTP_UNZSTD_PROCESS)
+                {
+                    ctx->in_buf = NULL;
+                    continue;
+                }
+            }
+
+            rc = ngx_http_unzstd_get_buffer(ctx);
+            if (rc == NGX_ERROR) {
+                goto failed;
             }
 
             if (rc == NGX_AGAIN) {
-                continue;
-            }
-
-            rc = ngx_http_unzstd_filter_get_buf(r, ctx);
-
-            if (rc == NGX_DECLINED) {
+                blocked = 1;
                 break;
             }
+
+            before_in = ctx->bytes_in;
+            before_out = ctx->bytes_out;
+            rc = ngx_http_unzstd_process(ctx);
 
             if (rc == NGX_ERROR) {
                 goto failed;
             }
 
-            rc = ngx_http_unzstd_filter_inflate(r, ctx);
+            if (rc == NGX_OK
+                && ctx->operation != NGX_HTTP_UNZSTD_PROCESS)
+            {
+                if (ctx->operation == NGX_HTTP_UNZSTD_FINISH) {
+                    ctx->out_buf->last_buf = (r == r->main);
+                    ctx->out_buf->last_in_chain = 1;
+                    ctx->done = 1;
+                    ngx_http_unzstd_cleanup(ctx);
+
+                } else {
+                    ctx->out_buf->flush = 1;
+                }
+
+                if (ngx_http_unzstd_output(ctx) != NGX_OK) {
+                    goto failed;
+                }
+
+            } else if (ctx->out_buf->last == ctx->out_buf->end) {
+                if (ngx_http_unzstd_output(ctx) != NGX_OK) {
+                    goto failed;
+                }
+            }
 
             if (rc == NGX_OK) {
-                break;
+                ctx->in_buf = NULL;
+
+            } else if (before_in == ctx->bytes_in
+                       && before_out == ctx->bytes_out)
+            {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "unzstd decoder made no progress");
+                goto failed;
             }
 
+            if (rc == NGX_AGAIN && ngx_buf_size(ctx->in_buf) == 0) {
+                ctx->in_buf = &ngx_http_unzstd_empty_buf;
+            }
+
+            if (ctx->done) {
+                break;
+            }
+        }
+
+        if (ctx->out_buf && ctx->out_buf->last != ctx->out_buf->pos) {
+            if (ngx_http_unzstd_output(ctx) != NGX_OK) {
+                goto failed;
+            }
+        }
+
+        rc = NGX_OK;
+
+        if (ctx->out || ctx->busy) {
+            rc = ngx_http_next_body_filter(r, ctx->out);
             if (rc == NGX_ERROR) {
                 goto failed;
             }
 
-            /* rc == NGX_AGAIN */
+            ngx_chain_update_chains(r->pool, &ctx->free, &ctx->busy, &ctx->out,
+                         (ngx_buf_tag_t) &ngx_http_unzstd_filter_module);
+            ctx->last_out = &ctx->out;
         }
 
-        if (ctx->out == NULL && !flush) {
-            return ctx->busy ? NGX_AGAIN : NGX_OK;
-        }
-
-        rc = ngx_http_next_body_filter(r, ctx->out);
-
-        if (rc == NGX_ERROR) {
-            goto failed;
-        }
-
-        ngx_chain_update_chains(r->pool, &ctx->free, &ctx->busy, &ctx->out,
-                                (ngx_buf_tag_t)
-                                &ngx_http_unzstd_filter_module);
-        ctx->last_out = &ctx->out;
-
-        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                       "unzstd out: %p", ctx->out);
-
-        ctx->nomem = 0;
-        flush = 0;
-
-        if (ctx->done) {
+        if (ctx->done || !blocked) {
             return rc;
         }
-    }
 
-    /* unreachable */
+        if (ctx->free == NULL) {
+            return NGX_AGAIN;
+        }
+    }
 
 failed:
 
     ctx->done = 1;
-
-    if (ctx->dstream != NULL) {
-        free_rc = ZSTD_freeDStream(ctx->dstream);
-        ctx->dstream = NULL;
-
-        if (ZSTD_isError(free_rc)) {
-            ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
-                          "ZSTD_freeDStream() failed: %s",
-                          ZSTD_getErrorName(free_rc));
-        }
-    }
+    ngx_http_unzstd_cleanup(ctx);
 
     return NGX_ERROR;
 }
 
 
 static ngx_int_t
-ngx_http_zstd_ok(ngx_http_request_t *r)
+ngx_http_unzstd_get_buffer(ngx_http_unzstd_ctx_t *ctx)
+{
+    ngx_buf_t    *b;
+    ngx_chain_t  *cl;
+
+    if (ctx->out_buf) {
+        return NGX_OK;
+    }
+
+    if (ctx->free) {
+        cl = ctx->free;
+        ctx->free = cl->next;
+        b = cl->buf;
+        ngx_free_chain(ctx->request->pool, cl);
+
+    } else if (ctx->bufs < (ngx_uint_t) ctx->conf->bufs.num) {
+        b = ngx_create_temp_buf(ctx->request->pool, ctx->conf->bufs.size);
+        if (b == NULL) {
+            return NGX_ERROR;
+        }
+
+        ctx->bufs++;
+
+    } else {
+        return NGX_AGAIN;
+    }
+
+    b->pos = b->start;
+    b->last = b->start;
+    b->tag = (ngx_buf_tag_t) &ngx_http_unzstd_filter_module;
+    b->temporary = 1;
+    b->recycled = 1;
+    b->flush = 0;
+    b->sync = 0;
+    b->last_buf = 0;
+    b->last_in_chain = 0;
+
+    ctx->out_buf = b;
+
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_http_unzstd_output(ngx_http_unzstd_ctx_t *ctx)
+{
+    ngx_chain_t  *cl;
+
+    cl = ngx_alloc_chain_link(ctx->request->pool);
+    if (cl == NULL) {
+        return NGX_ERROR;
+    }
+
+    if (ctx->out_buf->pos == ctx->out_buf->last) {
+        ctx->out_buf->temporary = 0;
+        ctx->out_buf->sync = 1;
+    }
+
+    cl->buf = ctx->out_buf;
+    cl->next = NULL;
+    *ctx->last_out = cl;
+    ctx->last_out = &cl->next;
+    ctx->out_buf = NULL;
+
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_http_unzstd_result(ngx_http_unzstd_ctx_t *ctx,
+    ngx_flag_t more)
+{
+    if (ngx_buf_size(ctx->in_buf) || more) {
+        return NGX_AGAIN;
+    }
+
+    if (ctx->operation == NGX_HTTP_UNZSTD_FINISH && !ctx->complete) {
+        ngx_log_error(NGX_LOG_ERR, ctx->request->connection->log, 0,
+                      "truncated zstd response");
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
+
+
+static void
+ngx_http_unzstd_cleanup(void *data)
+{
+    ngx_http_unzstd_ctx_t  *ctx = data;
+
+    ngx_http_unzstd_close(ctx);
+    ctx->initialized = 0;
+}
+
+
+static ngx_int_t
+ngx_http_unzstd_init(ngx_http_unzstd_ctx_t *ctx)
+{
+    size_t                        rc;
+    ngx_http_unzstd_main_conf_t  *conf;
+
+    ctx->state = ZSTD_createDCtx();
+
+    if (ctx->state == NULL) {
+        return NGX_ERROR;
+    }
+
+    conf = ngx_http_get_module_main_conf(ctx->request,
+                                         ngx_http_unzstd_filter_module);
+    if (conf->dict) {
+        rc = ZSTD_DCtx_refDDict(ctx->state, conf->dict);
+        if (ZSTD_isError(rc)) {
+            ngx_log_error(NGX_LOG_ERR, ctx->request->connection->log, 0,
+                          "ZSTD_DCtx_refDDict() failed: %s",
+                          ZSTD_getErrorName(rc));
+            return NGX_ERROR;
+        }
+    }
+
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_http_unzstd_process(ngx_http_unzstd_ctx_t *ctx)
+{
+    size_t          rc;
+    ZSTD_inBuffer   in;
+    ZSTD_outBuffer  out;
+
+    if (ctx->complete && ngx_buf_size(ctx->in_buf) == 0) {
+        return NGX_OK;
+    }
+
+    in.src = ctx->in_buf->pos;
+    in.size = ngx_min(ngx_buf_size(ctx->in_buf), NGX_HTTP_UNZSTD_CHUNK);
+    in.pos = 0;
+    out.dst = ctx->out_buf->last;
+    out.size = ngx_min(ctx->out_buf->end - ctx->out_buf->last,
+                       NGX_HTTP_UNZSTD_CHUNK);
+    out.pos = 0;
+
+    rc = ZSTD_decompressStream(ctx->state, &out, &in);
+
+    if (in.pos) {
+        ctx->in_buf->pos += in.pos;
+        ctx->bytes_in += in.pos;
+    }
+
+    ctx->out_buf->last += out.pos;
+    ctx->bytes_out += out.pos;
+
+    if (ZSTD_isError(rc)) {
+        ngx_log_error(NGX_LOG_ERR, ctx->request->connection->log, 0,
+                      "ZSTD_decompressStream() failed: %s",
+                      ZSTD_getErrorName(rc));
+        return NGX_ERROR;
+    }
+
+    ctx->complete = (rc == 0);
+
+    return ngx_http_unzstd_result(ctx,
+                                         !ctx->complete && out.pos == out.size);
+}
+
+
+static void
+ngx_http_unzstd_close(ngx_http_unzstd_ctx_t *ctx)
+{
+    if (ctx->state) {
+        ZSTD_freeDCtx(ctx->state);
+        ctx->state = NULL;
+    }
+}
+
+
+static ngx_int_t
+ngx_http_unzstd_ok(ngx_http_request_t *r)
 {
     ngx_table_elt_t  *ae;
 
@@ -398,24 +620,17 @@ ngx_http_zstd_ok(ngx_http_request_t *r)
     }
 
     if (ngx_memcmp(ae->value.data, "zstd,", 5) != 0
-        && ngx_http_zstd_accept_encoding(&ae->value) != NGX_OK)
+        && ngx_http_unzstd_accept_encoding(&ae->value) != NGX_OK)
     {
         return NGX_DECLINED;
     }
-
-    r->gzip_tested = 1;
-    r->gzip_ok = 0;
 
     return NGX_OK;
 }
 
 
-/*
- * a copy of ngx_http_gzip_accept_encoding, for zstd content encoding
- */
-
 static ngx_int_t
-ngx_http_zstd_accept_encoding(ngx_str_t *ae)
+ngx_http_unzstd_accept_encoding(ngx_str_t *ae)
 {
     u_char  *p, *start, *last;
 
@@ -474,7 +689,7 @@ equal:
         return NGX_DECLINED;
     }
 
-    if (ngx_http_zstd_quantity(p, last) == 0) {
+    if (ngx_http_unzstd_quantity(p, last) == 0) {
         return NGX_DECLINED;
     }
 
@@ -482,12 +697,8 @@ equal:
 }
 
 
-/*
- * a copy of ngx_http_gzip_quantity
- */
-
 static ngx_uint_t
-ngx_http_zstd_quantity(u_char *p, u_char *last)
+ngx_http_unzstd_quantity(u_char *p, u_char *last)
 {
     u_char      c;
     ngx_uint_t  n, q;
@@ -541,482 +752,209 @@ ngx_http_zstd_quantity(u_char *p, u_char *last)
 
 
 static ngx_int_t
-ngx_http_unzstd_filter_inflate_start(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx)
+ngx_http_unzstd_cache_control(ngx_http_request_t *r)
 {
-    size_t                        rc;
-    ZSTD_customMem                cmem;
-    ngx_http_unzstd_main_conf_t  *umcf;
+    u_char           *p, *last, *start;
+    ngx_uint_t        i, quoted;
+    ngx_list_part_t  *part;
+    ngx_table_elt_t  *h;
 
-    umcf = ngx_http_get_module_main_conf(r, ngx_http_unzstd_filter_module);
+    part = &r->headers_out.headers.part;
+    h = part->elts;
 
-    cmem.customAlloc = ngx_http_unzstd_filter_alloc;
-    cmem.customFree = ngx_http_unzstd_filter_free;
-    cmem.opaque = ctx;
+    for (i = 0; /* void */; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
 
-    ctx->dstream = ZSTD_createDStream_advanced(cmem);
-    if (ctx->dstream == NULL) {
-        ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
-                      "ZSTD_createDStream_advanced() failed");
-        return NGX_ERROR;
-    }
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
 
-    rc = ZSTD_initDStream(ctx->dstream);
-    if (ZSTD_isError(rc)) {
-        ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
-                      "ZSTD_initDStream() failed: %s",
-                      ZSTD_getErrorName(rc));
-        goto failed;
-    }
+        if (h[i].hash == 0
+            || h[i].key.len != sizeof("Cache-Control") - 1
+            || ngx_strncasecmp(h[i].key.data, (u_char *) "Cache-Control",
+                               sizeof("Cache-Control") - 1) != 0)
+        {
+            continue;
+        }
 
-    if (umcf->dict != NULL) {
-        rc = ZSTD_DCtx_refDDict(ctx->dstream, umcf->dict);
-        if (ZSTD_isError(rc)) {
-            ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
-                          "ZSTD_DCtx_refDDict() failed: %s",
-                          ZSTD_getErrorName(rc));
-            goto failed;
+        p = h[i].value.data;
+        last = p + h[i].value.len;
+
+        while (p < last) {
+            while (p < last && (*p == ' ' || *p == '\t' || *p == ',')) {
+                p++;
+            }
+
+            start = p;
+
+            while (p < last && *p != ' ' && *p != '\t'
+                   && *p != ',' && *p != '=')
+            {
+                p++;
+            }
+
+            if (p - start == sizeof("no-transform") - 1
+                && ngx_strncasecmp(start, (u_char *) "no-transform",
+                                   sizeof("no-transform") - 1) == 0)
+            {
+                return NGX_DECLINED;
+            }
+
+            quoted = 0;
+
+            while (p < last) {
+                if (*p == ',' && !quoted) {
+                    p++;
+                    break;
+                }
+
+                if (*p == '"') {
+                    quoted = !quoted;
+
+                } else if (*p == '\\' && quoted && p + 1 < last) {
+                    p++;
+                }
+
+                p++;
+            }
         }
     }
 
-    ctx->started = 1;
-    ctx->last_out = &ctx->out;
-    ctx->flush = NGX_HTTP_UNZSTD_IN_BUF_NO_FLUSH;
-
     return NGX_OK;
-
-failed:
-
-    rc = ZSTD_freeDStream(ctx->dstream);
-    ctx->dstream = NULL;
-
-    if (ZSTD_isError(rc)) {
-        ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
-                      "ZSTD_freeDStream() failed: %s",
-                      ZSTD_getErrorName(rc));
-    }
-
-    return NGX_ERROR;
 }
 
 
 static ngx_int_t
-ngx_http_unzstd_filter_add_data(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx)
+ngx_http_unzstd_policy(ngx_http_request_t *r)
 {
-    ngx_chain_t  *cl;
+    time_t                     date, expires;
+    ngx_uint_t                 p;
+    ngx_table_elt_t           *e, *d, *cc;
+    ngx_http_core_loc_conf_t  *clcf;
 
-    if (ctx->buffer_in.pos < ctx->buffer_in.size
-        || ctx->flush != NGX_HTTP_UNZSTD_IN_BUF_NO_FLUSH
-        || ctx->redo)
-    {
-        return NGX_OK;
-    }
+    static ngx_str_t  no_cache = ngx_string("no-cache");
+    static ngx_str_t  no_store = ngx_string("no-store");
+    static ngx_str_t  private = ngx_string("private");
 
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "unzstd in: %p", ctx->in);
-
-    if (ctx->in == NULL) {
+    if (ngx_http_unzstd_cache_control(r) != NGX_OK) {
         return NGX_DECLINED;
     }
 
-    cl = ctx->in;
-    ctx->in_buf = cl->buf;
-    ctx->in = cl->next;
+    clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
-    ngx_free_chain(r->pool, cl);
-
-    ctx->buffer_in.src = ctx->in_buf->pos;
-    ctx->buffer_in.pos = 0;
-    ctx->buffer_in.size = ngx_buf_size(ctx->in_buf);
-
-    ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "unzstd in_buf:%p src:%p size:%uz",
-                   ctx->in_buf, ctx->buffer_in.src, ctx->buffer_in.size);
-
-    if (ctx->in_buf->last_buf || ctx->in_buf->last_in_chain) {
-        ctx->flush = NGX_HTTP_UNZSTD_IN_BUF_FINISH;
-
-    } else if (ctx->in_buf->flush) {
-        ctx->flush = NGX_HTTP_UNZSTD_IN_BUF_SYNC_FLUSH;
-
-    } else if (ctx->buffer_in.size == 0) {
-        return NGX_AGAIN;
-    }
-
-    return NGX_OK;
-}
-
-
-static ngx_int_t
-ngx_http_unzstd_filter_get_buf(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx)
-{
-    ngx_chain_t            *cl;
-    ngx_http_unzstd_conf_t *conf;
-
-    if (ctx->buffer_out.pos < ctx->buffer_out.size) {
-        return NGX_OK;
-    }
-
-    conf = ngx_http_get_module_loc_conf(r, ngx_http_unzstd_filter_module);
-
-    if (ctx->free) {
-        cl = ctx->free;
-        ctx->out_buf = cl->buf;
-        ctx->free = cl->next;
-
-        ngx_free_chain(r->pool, cl);
-
-        ctx->out_buf->flush = 0;
-
-    } else if (ctx->bufs < conf->bufs.num) {
-
-        ctx->out_buf = ngx_create_temp_buf(r->pool, conf->bufs.size);
-        if (ctx->out_buf == NULL) {
-            return NGX_ERROR;
-        }
-
-        ctx->out_buf->tag = (ngx_buf_tag_t) &ngx_http_unzstd_filter_module;
-        ctx->out_buf->recycled = 1;
-        ctx->bufs++;
-
-    } else {
-        ctx->nomem = 1;
+    if (r->http_version < clcf->gzip_http_version
+        || (r->headers_in.msie6 && clcf->gzip_disable_msie6))
+    {
         return NGX_DECLINED;
     }
 
-    ctx->buffer_out.dst = ctx->out_buf->pos;
-    ctx->buffer_out.pos = 0;
-    ctx->buffer_out.size = ctx->out_buf->end - ctx->out_buf->pos;
-
-    return NGX_OK;
-}
-
-
-static ngx_int_t
-ngx_http_unzstd_filter_inflate(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx)
-{
-    size_t        rc, prev_in_pos;
-    ngx_uint_t    more;
-    ngx_buf_t    *b;
-    ngx_chain_t  *cl;
-
-    ngx_log_debug6(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "ZSTD_decompressStream() in: src:%p dst:%p ip:%uz op:%uz "
-                   "flush:%d redo:%d",
-                   ctx->buffer_in.src, ctx->buffer_out.dst,
-                   ctx->buffer_in.pos, ctx->buffer_out.pos,
-                   ctx->flush, ctx->redo);
-
-    prev_in_pos = ctx->buffer_in.pos;
-
-    if (ctx->frame_done && ctx->buffer_in.pos == ctx->buffer_in.size) {
-        rc = 0;
-
-    } else {
-        rc = ZSTD_decompressStream(ctx->dstream, &ctx->buffer_out,
-                                   &ctx->buffer_in);
-
-        if (!ZSTD_isError(rc)) {
-            ctx->frame_done = (rc == 0);
-        }
+#if (NGX_HTTP_DEGRADATION)
+    if (clcf->gzip_disable_degradation && ngx_http_degraded(r)) {
+        return NGX_DECLINED;
     }
 
-    if (ZSTD_isError(rc)) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "ZSTD_decompressStream() failed: %s",
-                      ZSTD_getErrorName(rc));
-        return NGX_ERROR;
+#endif
+
+    if (r->headers_in.via == NULL) {
+        goto ok;
     }
 
-    ngx_log_debug5(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "ZSTD_decompressStream() out: ip:%uz is:%uz op:%uz os:%uz "
-                   "rc:%uz",
-                   ctx->buffer_in.pos, ctx->buffer_in.size,
-                   ctx->buffer_out.pos, ctx->buffer_out.size, rc);
+    p = clcf->gzip_proxied;
 
-    more = ctx->buffer_in.pos < ctx->buffer_in.size;
-
-    ctx->in_buf->pos += ctx->buffer_in.pos - prev_in_pos;
-    ctx->out_buf->last = ctx->out_buf->pos + ctx->buffer_out.pos;
-
-    if (!more) {
-        ngx_memzero(&ctx->buffer_in, sizeof(ZSTD_inBuffer));
+    if (p & NGX_HTTP_GZIP_PROXIED_OFF) {
+        return NGX_DECLINED;
     }
 
-    if (ctx->flush == NGX_HTTP_UNZSTD_IN_BUF_FINISH
-        && !more && ctx->frame_done)
-    {
-        if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
-            return NGX_ERROR;
+    if (p & NGX_HTTP_GZIP_PROXIED_ANY) {
+        goto ok;
+    }
+
+    if (r->headers_in.authorization && (p & NGX_HTTP_GZIP_PROXIED_AUTH)) {
+        goto ok;
+    }
+
+    e = r->headers_out.expires;
+
+    if (e) {
+        if (!(p & NGX_HTTP_GZIP_PROXIED_EXPIRED)) {
+            return NGX_DECLINED;
         }
 
-        return NGX_OK;
-    }
-
-    if (ctx->buffer_out.pos == ctx->buffer_out.size) {
-
-        /* zstd wants to output some more data */
-
-        cl = ngx_alloc_chain_link(r->pool);
-        if (cl == NULL) {
-            return NGX_ERROR;
+        expires = ngx_parse_http_time(e->value.data, e->value.len);
+        if (expires == NGX_ERROR) {
+            return NGX_DECLINED;
         }
 
-        cl->buf = ctx->out_buf;
-        cl->next = NULL;
-        *ctx->last_out = cl;
-        ctx->last_out = &cl->next;
+        d = r->headers_out.date;
 
-        ctx->redo = ctx->frame_done ? more : 1;
-
-        return NGX_AGAIN;
-    }
-
-    ctx->redo = 0;
-
-    if (ctx->flush == NGX_HTTP_UNZSTD_IN_BUF_SYNC_FLUSH) {
-
-        ctx->flush = NGX_HTTP_UNZSTD_IN_BUF_NO_FLUSH;
-
-        cl = ngx_alloc_chain_link(r->pool);
-        if (cl == NULL) {
-            return NGX_ERROR;
-        }
-
-        b = ctx->out_buf;
-
-        if (ngx_buf_size(b) == 0) {
-
-            b = ngx_calloc_buf(ctx->request->pool);
-            if (b == NULL) {
-                return NGX_ERROR;
+        if (d) {
+            date = ngx_parse_http_time(d->value.data, d->value.len);
+            if (date == NGX_ERROR) {
+                return NGX_DECLINED;
             }
 
         } else {
-            ctx->buffer_out.pos = ctx->buffer_out.size;
+            date = ngx_time();
         }
 
-        b->flush = 1;
+        if (expires < date) {
+            goto ok;
+        }
 
-        cl->buf = b;
-        cl->next = NULL;
-        *ctx->last_out = cl;
-        ctx->last_out = &cl->next;
-
-        return NGX_OK;
+        return NGX_DECLINED;
     }
 
-    if (ctx->flush == NGX_HTTP_UNZSTD_IN_BUF_FINISH
-        && ctx->buffer_in.pos == ctx->buffer_in.size)
+    cc = r->headers_out.cache_control;
+
+    if (cc) {
+        if ((p & NGX_HTTP_GZIP_PROXIED_NO_CACHE)
+            && ngx_http_parse_multi_header_lines(r, cc, &no_cache, NULL))
+        {
+            goto ok;
+        }
+
+        if ((p & NGX_HTTP_GZIP_PROXIED_NO_STORE)
+            && ngx_http_parse_multi_header_lines(r, cc, &no_store, NULL))
+        {
+            goto ok;
+        }
+
+        if ((p & NGX_HTTP_GZIP_PROXIED_PRIVATE)
+            && ngx_http_parse_multi_header_lines(r, cc, &private, NULL))
+        {
+            goto ok;
+        }
+
+        return NGX_DECLINED;
+    }
+
+    if ((p & NGX_HTTP_GZIP_PROXIED_NO_LM) && r->headers_out.last_modified) {
+        return NGX_DECLINED;
+    }
+
+    if ((p & NGX_HTTP_GZIP_PROXIED_NO_ETAG) && r->headers_out.etag) {
+        return NGX_DECLINED;
+    }
+
+ok:
+
+#if (NGX_PCRE)
+    if (clcf->gzip_disable && r->headers_in.user_agent
+        && ngx_regex_exec_array(clcf->gzip_disable,
+                                &r->headers_in.user_agent->value,
+                                r->connection->log)
+           != NGX_DECLINED)
     {
-        if (!ctx->frame_done) {
-            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                          "ZSTD_decompressStream() returned %uz "
-                          "on response end", rc);
-            return NGX_ERROR;
-        }
-
-        if (ngx_http_unzstd_filter_inflate_end(r, ctx) != NGX_OK) {
-            return NGX_ERROR;
-        }
-
-        return NGX_OK;
+        return NGX_DECLINED;
     }
 
-    if (rc == 0 && more) {
-        return NGX_AGAIN;
-    }
-
-    if (ctx->in == NULL) {
-
-        b = ctx->out_buf;
-
-        if (ngx_buf_size(b) == 0) {
-            return NGX_OK;
-        }
-
-        cl = ngx_alloc_chain_link(r->pool);
-        if (cl == NULL) {
-            return NGX_ERROR;
-        }
-
-        ctx->buffer_out.pos = ctx->buffer_out.size;
-
-        cl->buf = b;
-        cl->next = NULL;
-        *ctx->last_out = cl;
-        ctx->last_out = &cl->next;
-
-        return NGX_OK;
-    }
-
-    return NGX_AGAIN;
-}
-
-
-static ngx_int_t
-ngx_http_unzstd_filter_inflate_end(ngx_http_request_t *r,
-    ngx_http_unzstd_ctx_t *ctx)
-{
-    size_t        rc;
-    ngx_buf_t    *b;
-    ngx_chain_t  *cl;
-
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "unzstd inflate end");
-
-    rc = ZSTD_freeDStream(ctx->dstream);
-    ctx->dstream = NULL;
-
-    if (ZSTD_isError(rc)) {
-        ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
-                      "ZSTD_freeDStream() failed: %s",
-                      ZSTD_getErrorName(rc));
-        return NGX_ERROR;
-    }
-
-    b = ctx->out_buf;
-
-    if (ngx_buf_size(b) == 0) {
-
-        b = ngx_calloc_buf(ctx->request->pool);
-        if (b == NULL) {
-            return NGX_ERROR;
-        }
-    }
-
-    cl = ngx_alloc_chain_link(r->pool);
-    if (cl == NULL) {
-        return NGX_ERROR;
-    }
-
-    cl->buf = b;
-    cl->next = NULL;
-    *ctx->last_out = cl;
-    ctx->last_out = &cl->next;
-
-    b->last_buf = (r == r->main) ? 1 : 0;
-    b->last_in_chain = 1;
-    b->sync = 1;
-
-    ctx->done = 1;
+#endif
 
     return NGX_OK;
-}
-
-
-static void *
-ngx_http_unzstd_create_main_conf(ngx_conf_t *cf)
-{
-    ngx_http_unzstd_main_conf_t  *conf;
-
-    conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_unzstd_main_conf_t));
-    if (conf == NULL) {
-        return NULL;
-    }
-
-    return conf;
-}
-
-
-static char *
-ngx_http_unzstd_init_main_conf(ngx_conf_t *cf, void *conf)
-{
-    ngx_fd_t                      fd;
-    size_t                        size;
-    ssize_t                       n;
-    u_char                       *buf;
-    ngx_file_info_t               info;
-    ngx_pool_cleanup_t           *cln;
-    ngx_http_unzstd_main_conf_t  *umcf;
-
-    umcf = conf;
-    fd = NGX_INVALID_FILE;
-    buf = NULL;
-
-    if (umcf->dict_file.len == 0) {
-        return NGX_CONF_OK;
-    }
-
-    if (ngx_conf_full_name(cf->cycle, &umcf->dict_file, 1) != NGX_OK) {
-        return NGX_CONF_ERROR;
-    }
-
-    fd = ngx_open_file(umcf->dict_file.data, NGX_FILE_RDONLY,
-                       NGX_FILE_OPEN, 0);
-    if (fd == NGX_INVALID_FILE) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
-                           ngx_open_file_n " \"%V\" failed",
-                           &umcf->dict_file);
-        return NGX_CONF_ERROR;
-    }
-
-    if (ngx_fd_info(fd, &info) == NGX_FILE_ERROR) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
-                           ngx_fd_info_n " \"%V\" failed",
-                           &umcf->dict_file);
-        goto failed;
-    }
-
-    size = ngx_file_size(&info);
-    buf = ngx_palloc(cf->pool, size);
-    if (buf == NULL) {
-        goto failed;
-    }
-
-    n = ngx_read_fd(fd, buf, size);
-    if (n < 0) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
-                           ngx_read_fd_n " \"%V\" failed",
-                           &umcf->dict_file);
-        goto failed;
-    }
-
-    if ((size_t) n != size) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
-                           ngx_read_fd_n " \"%V\" incomplete",
-                           &umcf->dict_file);
-        goto failed;
-    }
-
-    umcf->dict = ZSTD_createDDict_byReference(buf, size);
-    if (umcf->dict == NULL) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                           "ZSTD_createDDict_byReference() failed");
-        goto failed;
-    }
-
-    cln = ngx_pool_cleanup_add(cf->pool, 0);
-    if (cln == NULL) {
-        ZSTD_freeDDict(umcf->dict);
-        umcf->dict = NULL;
-        goto failed;
-    }
-
-    cln->handler = ngx_http_unzstd_free_ddict;
-    cln->data = umcf->dict;
-
-    if (ngx_close_file(fd) == NGX_FILE_ERROR) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
-                           ngx_close_file_n " \"%V\" failed",
-                           &umcf->dict_file);
-        return NGX_CONF_ERROR;
-    }
-
-    return NGX_CONF_OK;
-
-failed:
-
-    if (fd != NGX_INVALID_FILE && ngx_close_file(fd) == NGX_FILE_ERROR) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
-                           ngx_close_file_n " \"%V\" failed",
-                           &umcf->dict_file);
-    }
-
-    return NGX_CONF_ERROR;
 }
 
 
@@ -1091,41 +1029,120 @@ ngx_http_unzstd_filter_init(ngx_conf_t *cf)
 }
 
 
+static void *
+ngx_http_unzstd_create_main_conf(ngx_conf_t *cf)
+{
+    ngx_http_unzstd_main_conf_t  *conf;
+
+    conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_unzstd_main_conf_t));
+    if (conf == NULL) {
+        return NULL;
+    }
+
+    return conf;
+}
+
+
+static char *
+ngx_http_unzstd_init_main_conf(ngx_conf_t *cf, void *conf)
+{
+    ngx_fd_t                      fd;
+    size_t                        size;
+    ssize_t                       n;
+    u_char                       *buf;
+    ngx_file_info_t               info;
+    ngx_pool_cleanup_t           *cln;
+    ngx_http_unzstd_main_conf_t  *umcf;
+
+    umcf = conf;
+    fd = NGX_INVALID_FILE;
+    buf = NULL;
+
+    if (umcf->dict_file.len == 0) {
+        return NGX_CONF_OK;
+    }
+
+    if (ngx_conf_full_name(cf->cycle, &umcf->dict_file, 1) != NGX_OK) {
+        return NGX_CONF_ERROR;
+    }
+
+    fd = ngx_open_file(umcf->dict_file.data, NGX_FILE_RDONLY,
+                       NGX_FILE_OPEN, 0);
+    if (fd == NGX_INVALID_FILE) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
+                           ngx_open_file_n " \"%V\" failed",
+                           &umcf->dict_file);
+        return NGX_CONF_ERROR;
+    }
+
+    if (ngx_fd_info(fd, &info) == NGX_FILE_ERROR) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
+                           ngx_fd_info_n " \"%V\" failed",
+                           &umcf->dict_file);
+        goto failed;
+    }
+
+    size = ngx_file_size(&info);
+    buf = ngx_palloc(cf->temp_pool, size);
+    if (buf == NULL) {
+        goto failed;
+    }
+
+    n = ngx_read_fd(fd, buf, size);
+    if (n < 0) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
+                           ngx_read_fd_n " \"%V\" failed",
+                           &umcf->dict_file);
+        goto failed;
+    }
+
+    if ((size_t) n != size) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
+                           ngx_read_fd_n " \"%V\" incomplete",
+                           &umcf->dict_file);
+        goto failed;
+    }
+
+    umcf->dict = ZSTD_createDDict(buf, size);
+    if (umcf->dict == NULL) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "ZSTD_createDDict() failed");
+        goto failed;
+    }
+
+    cln = ngx_pool_cleanup_add(cf->pool, 0);
+    if (cln == NULL) {
+        ZSTD_freeDDict(umcf->dict);
+        umcf->dict = NULL;
+        goto failed;
+    }
+
+    cln->handler = ngx_http_unzstd_free_ddict;
+    cln->data = umcf->dict;
+
+    if (ngx_close_file(fd) == NGX_FILE_ERROR) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
+                           ngx_close_file_n " \"%V\" failed",
+                           &umcf->dict_file);
+        return NGX_CONF_ERROR;
+    }
+
+    return NGX_CONF_OK;
+
+failed:
+
+    if (fd != NGX_INVALID_FILE && ngx_close_file(fd) == NGX_FILE_ERROR) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, ngx_errno,
+                           ngx_close_file_n " \"%V\" failed",
+                           &umcf->dict_file);
+    }
+
+    return NGX_CONF_ERROR;
+}
+
+
 static void
 ngx_http_unzstd_free_ddict(void *data)
 {
     (void) ZSTD_freeDDict(data);
-}
-
-
-static void *
-ngx_http_unzstd_filter_alloc(void *opaque, size_t size)
-{
-    ngx_http_unzstd_ctx_t *ctx = opaque;
-
-    void  *p;
-
-    p = ngx_palloc(ctx->request->pool, size);
-    if (p == NULL) {
-        return NULL;
-    }
-
-    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, ctx->request->connection->log, 0,
-                   "unzstd alloc: %p, size: %uz", p, size);
-
-    return p;
-}
-
-
-static void
-ngx_http_unzstd_filter_free(void *opaque, void *address)
-{
-#if (NGX_DEBUG)
-
-    ngx_http_unzstd_ctx_t *ctx = opaque;
-
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, ctx->request->connection->log, 0,
-                   "unzstd free: %p", address);
-
-#endif
 }
