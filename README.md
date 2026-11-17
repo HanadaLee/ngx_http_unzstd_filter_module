@@ -40,7 +40,7 @@ To use theses modules, configure your nginx branch with `--add-module=/path/to/n
 
 * Zstandard 1.4.0 or later is required.
 * You can set environment variables `ZSTD_INC` and `ZSTD_LIB` to specify the path to `zstd.h` and the path to the zstd library respectively.
-* A shared library is used when present; otherwise, the static library is used. Static linking is recommended because this Nginx module uses **advanced APIs**.
+* A shared library is used when present; otherwise, the static library is used.
 * System's zstd bundle will be linked if `ZSTD_INC` and `ZSTD_LIB` are not specified.
 
 # Directives
@@ -80,6 +80,14 @@ inside a `when` block.
 
 Sets the number and size of buffers used to decompress a response. By default, the buffer size is equal to one memory page. This is either 4K or 8K, depending on a platform.
 
+## unzstd_dict_file
+
+**Syntax:** `unzstd_dict_file file;`\
+**Default:** —\
+**Context:** `http`
+
+Specifies the dictionary used to decompress Zstd responses. The sender must use the same dictionary.
+
 # Author
 
 Hanada im@hanada.info
@@ -89,3 +97,16 @@ This module is based on [ngx_http_gunzip_module](https://nginx.org/en/docs/http/
 # License
 
 This Nginx module is licensed under [BSD 2-Clause License](LICENSE).
+
+
+# Compatibility
+
+Decompression respects the core `gzip_http_version`, `gzip_proxied`, and `gzip_disable` settings when determining whether to preserve an accepted encoding. `unzstd_force on` bypasses that client check.
+
+Responses with `Cache-Control: no-transform`, partial responses, and stacked content encodings are passed through. Invalid or incomplete streams terminate the response. Concatenated Zstd frames are supported.
+
+The filter runs before content filters such as `sub_filter` and supports both proxy buffering modes. The decoder is released when processing finishes or the request is cancelled.
+
+# Testing
+
+`util/run-tests.sh` runs the existing suite and `t/parity/` using [nginx-tests](https://github.com/nginx/nginx-tests). Tests cover slow clients, cancellation, partial responses, malformed streams, and decompression followed by content replacement and gzip compression.
