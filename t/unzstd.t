@@ -70,6 +70,7 @@ http {
     %%TEST_GLOBALS_HTTP%%
 
     gzip_vary on;
+    gzip_http_version 1.0;
     unzstd_dict_file %%TESTDIR%%/dict;
 
     server {
@@ -225,7 +226,7 @@ is(http_content(get('/error')), $plain,
 
 $r = get('/truncated');
 like($t->read_file('error.log'),
-    qr/ZSTD_decompressStream\(\) returned \d+ on response end/,
+    qr/truncated zstd response/,
     'truncated frame rejected');
 
 my $errors = zstd_error_count($t);
@@ -306,7 +307,7 @@ sub response_end_error_count {
     my ($test) = @_;
     my $log = $test->read_file('error.log');
 
-    return () = $log =~ /ZSTD_decompressStream\(\) returned \d+ on response end/g;
+    return () = $log =~ /truncated zstd response/g;
 }
 
 
